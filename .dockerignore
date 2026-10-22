@@ -1,0 +1,14 @@
+.git
+.github
+.claude
+archive
+__pycache__
+*.py[cod]
+*.egg-info
+build
+dist
+output
+experiments
+.DS_Store
+Dockerfile
+.dockerignore
