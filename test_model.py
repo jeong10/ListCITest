@@ -96,7 +96,7 @@ def testModel(G, Pv, pValue, outputCIs = False):
 
         p = CITester(xIndices, yIndices, zIndices)
 
-        if p >= pValue:
+        if p < pValue:
             violatedCIs.append(CI)
         
         roundedPvalue = round(p, 6)
@@ -107,7 +107,7 @@ def testModel(G, Pv, pValue, outputCIs = False):
     line = 'CIs in total: ' + str(len(CIs))
     print(line)
 
-    line = 'CIs violated (p-value >= ' + str(pValue) + '): ' + str(len(violatedCIs))
+    line = 'CIs violated (p-value < ' + str(pValue) + '): ' + str(len(violatedCIs))
     print(line)
 
     if outputCIs:
