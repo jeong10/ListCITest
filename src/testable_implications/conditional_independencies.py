@@ -6,6 +6,7 @@ from src.common.object_utils import ObjectUtils as ou
 from src.adjustment.adjustment_sets_utils import nodeNamesToString, TestSep, TestSepUnprojected
 from src.path_analysis.d_separation import DSeparation
 from src.projection.projection_utils import ProjectionUtils as pu
+from src.testable_implications.list_ci_fast import list_ci_fast
 
 def isSymmetric(ci1, ci2):
     isXYEqual = su.equals(ci1['X'], ci2['Y'], 'name')
@@ -221,6 +222,13 @@ class ConditionalIndependencies():
 
         # print('Variables (topo sorted):')
         # print(nodeNamesToString(V, False))
+
+        # Phase 3: bitset translation of the loop below (same CIs, same order); None = not applicable,
+        # then the list-based implementation below runs (it stays the reference / fallback)
+        fast = list_ci_fast(G, V)
+
+        if fast is not None:
+            return fast
 
         CI = []
 
