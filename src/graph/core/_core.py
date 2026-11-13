@@ -111,7 +111,26 @@ class _Core(object):
         self.simple = simple
         self.zero = [0] * n
         self.cache = {}
+        self._eidx = None
         self.full_view = _View(self)
+
+    def edge_index(self):
+        """``(to_pos, bid_from_pos, nonbid_from_pos)``: per node index, the positions (in ``edges``) of the edges ending
+        at it, of the bidirected edges starting at it, of the non-bidirected edges starting at it."""
+        e = self._eidx
+        if e is None:
+            n = self.n
+            to_pos = [[] for _ in range(n)]
+            bid_from = [[] for _ in range(n)]
+            nonbid_from = [[] for _ in range(n)]
+            for k, (u, v, a) in enumerate(self.edges):
+                to_pos[v].append(k)
+                if a.get('type_', DIRECTED) == BIDIRECTED:
+                    bid_from[u].append(k)
+                else:
+                    nonbid_from[u].append(k)
+            e = self._eidx = (to_pos, bid_from, nonbid_from)
+        return e
 
     def with_attr(self, i, attr):
         """A core for the same structure whose node ``i`` has the attribute dict ``attr``.

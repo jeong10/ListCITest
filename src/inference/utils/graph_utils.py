@@ -345,6 +345,13 @@ class GraphUtils():
     def getIncoming(w, G):
         w = ou.makeArray(w)
         wMap = GraphUtils.mapNodeNames(w)
+
+        # fast path (Phase 4): per-node edge index of the core (same edges, same order, fresh dicts)
+        fast = G._edges_touching(wMap, True)
+
+        if fast is not None:
+            return fast
+
         incoming = list(filter(lambda e: (
             e['type_'] == bidirectedEdgeType.id_ and e['from_'] in wMap) or e['to_'] in wMap, G.edges))
 
@@ -356,6 +363,13 @@ class GraphUtils():
     def getOutgoing(w, G):
         w = ou.makeArray(w)
         wMap = GraphUtils.mapNodeNames(w)
+
+        # fast path (Phase 4): per-node edge index of the core (same edges, same order, fresh dicts)
+        fast = G._edges_touching(wMap, False)
+
+        if fast is not None:
+            return fast
+
         outgoing = list(filter(
             lambda e: e['type_'] != bidirectedEdgeType.id_ and e['from_'] in wMap, G.edges))
 
@@ -377,7 +391,24 @@ class GraphUtils():
 
             return type(G)._from_view(v.sub(G._mask_of(subset, v.core)))
 
-        # legacy implementation (fallback for undirected graphs)
+        # undirected graphs (Phase 4): induced nx subgraph copy = same node order (G order) and same edge/adjacency order
+        # as the rebuild below (edges re-added in G.edges order)
+        # (built explicitly: nx's filtered subgraph view iterates in set order for small subsets)
+        ug = G._ug
+        keep = set(n['name'] for n in subset)
+        names = [n for n in ug.nodes if n in keep]
+        sub = ug.__class__()
+        sub.add_nodes_from((n, ug.nodes[n].copy()) for n in names)
+
+        for u in names:
+            for v, d in ug.adj[u].items():
+                if v in keep:
+                    sub.add_edge(u, v, **d)
+
+        if True:
+            return type(G)(sub)
+
+        # --- OLD (undirected subgraph by rebuilding; same result) ---
         graph = G.copy()
         graph.deleteNodes(graph.nodes)
         graph.addNodes(su.intersection(G.nodes, subset, 'name'))

@@ -300,6 +300,43 @@ class Graph():
             return i is not None and bool((self._view.active >> i) & 1)
         return name in self._s.nodes
 
+    def _edges_touching(self, names, incoming):
+        """Edge dicts (fresh, legacy ``edges`` order) of the edges that ``GraphUtils.getIncoming`` (``incoming=True``:
+        ``to_`` in names, or a ``<->`` edge with ``from_`` in names) / ``getOutgoing`` (``incoming=False``: non-``<->``
+        edges with ``from_`` in names) select, in O(degree) instead of scanning all edges.
+        ``None`` when not applicable (undirected graph, view with do-cuts): the caller scans ``self.edges``."""
+        if self._ug is not None:
+            return None
+        if self._view is not None:
+            v = self._view
+            if v.over or v.under:
+                return None
+            core = v.core
+            act = v.active
+        else:
+            core = self._get_core()
+            act = core.full
+        index = core.index
+        to_pos, bid_from, nonbid_from = core.edge_index()
+        cand = set()
+        for nm in names:
+            i = index.get(nm)
+            if i is None:
+                continue
+            if incoming:
+                cand.update(to_pos[i])
+                cand.update(bid_from[i])
+            else:
+                cand.update(nonbid_from[i])
+        cn = core.names
+        edges = core.edges
+        out = []
+        for k in sorted(cand):
+            u, v2, a = edges[k]
+            if (act >> u) & 1 and (act >> v2) & 1:
+                out.append(Graph._edge_dict(cn[u], cn[v2], a))
+        return out
+
     def _node_attrs(self, name):
         if self._ug is not None:
             return self._ug.nodes[name]
@@ -904,15 +941,30 @@ class Graph():
         for node in nodes:
             names[node['name']] = True
 
-        edges = list(filter(lambda e: e['type_'] == edgeType if edgeType else True, self.edges))
+        # fast path (Phase 4): walk the adjacency of the queried nodes instead of scanning all edges (same set, same node order)
+        adj = self._ug.adj
+        want = edgeType if edgeType else None
+        found = set()
 
-        for edge in edges:
-            if edge['to_'] in names:
-                neighbors[edge['from_']] = True
-            if edge['from_'] in names:
-                neighbors[edge['to_']] = True
+        for nm in names:
+            if nm in adj:
+                for other, d in adj[nm].items():
+                    if want is None or d.get('type_', directedEdgeType.id_) == want:
+                        found.add(other)
 
-        return list(filter(lambda n: n['name'] in neighbors and n['name'] not in names, self.nodes))
+        return [self._node_dict(n, a) for n, a in self._ug.nodes(data=True) if n in found and n not in names]
+
+        # --- OLD (undirected neighbors by scanning all edges; same result) ---
+        # edges = list(filter(lambda e: e['type_'] == edgeType if edgeType else True, self.edges))
+        #
+        # for edge in edges:
+        #     if edge['to_'] in names:
+        #         neighbors[edge['from_']] = True
+        #     if edge['from_'] in names:
+        #         neighbors[edge['to_']] = True
+        #
+        # return list(filter(lambda n: n['name'] in neighbors and n['name'] not in names, self.nodes))
+        # --- END OLD ---
 
     def connectedComponents(self):
         # legacy: nx.connected_components, which only exists for undirected graphs

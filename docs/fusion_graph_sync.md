@@ -38,3 +38,13 @@ verbatim; bitset translation of `ListCI`) and a small dispatch in `ConditionalIn
 original list-based loop below it stays as the fallback and reference). Same ordered output (golden: 0 differences); `tests/listci`
 holds the identity regression test. On projected bnlearn graphs (U = 0-50 %, 10 samples, py3.7) the new code is 12-119x (sm),
 100-1300x (md) and 630-2600x (lg) faster than the original; see fusion_python `bench/results/bnlearn_projection/REPORT.md`.
+
+Phase 4 (fusion_python commits `204ab11` and `333bebb`; only the shared primitives exist in this repo, the front-door / back-door /
+Verma / IV features are fusion-only): applied as a patch of fusion's `src/graph/core/_core.py`, `src/graph/classes/graph.py` and
+`src/inference/utils/graph_utils.py` (the ListCITest-only hunks of `graph.py` are untouched):
+* `gu.getIncoming` / `gu.getOutgoing` use a per-node edge index of the core (`_Core.edge_index`, `Graph._edges_touching`): same edges, same
+  order, fresh dicts, O(degree); views with do-cuts and undirected graphs scan as before,
+* undirected (moralized) graphs: `Graph.neighbors` walks the adjacency (result in node order), `gu.subgraph` builds the induced graph in node
+  order (nx's `subgraph(...).copy()` is NOT equivalent: its view iterates in set order for small subsets). Old code kept as OLD blocks.
+* not ported: the `FindSep` mask path (this repo has no `FindSep`).
+* `tests/primitives` (differential tests against the legacy definitions). ListCITest golden (cli/random/ci/unittest, py3.12): 0 differences.
