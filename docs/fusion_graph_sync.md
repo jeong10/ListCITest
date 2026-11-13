@@ -32,3 +32,9 @@ Verification done for the migration (Python 3.12, `PYTHONHASHSEED=0`): CLI outpu
 `graphs/paper` + `graphs/bnlearn/sm`, seeded random graph construction / projection, ListCI/ListCIBF results, and the
 unit tests are identical to the pre-migration code; ListCI is ~2.8x faster on the paper and bnlearn graphs.
 `tests/graph_core` holds the graph tests shared with fusion_python.
+
+Phase 3 (fusion_python commit `1841f9d`, plus the review fix in the same tree): `src/testable_implications/list_ci_fast.py` (copied
+verbatim; bitset translation of `ListCI`) and a small dispatch in `ConditionalIndependencies.ListCI` (`list_ci_fast(G, V)` first; the
+original list-based loop below it stays as the fallback and reference). Same ordered output (golden: 0 differences); `tests/listci`
+holds the identity regression test. On projected bnlearn graphs (U = 0-50 %, 10 samples, py3.7) the new code is 12-119x (sm),
+100-1300x (md) and 630-2600x (lg) faster than the original; see fusion_python `bench/results/bnlearn_projection/REPORT.md`.
