@@ -48,3 +48,13 @@ Verma / IV features are fusion-only): applied as a patch of fusion's `src/graph/
   order (nx's `subgraph(...).copy()` is NOT equivalent: its view iterates in set order for small subsets). Old code kept as OLD blocks.
 * not ported: the `FindSep` mask path (this repo has no `FindSep`).
 * `tests/primitives` (differential tests against the legacy definitions). ListCITest golden (cli/random/ci/unittest, py3.12): 0 differences.
+
+## Phase 5 (runtime study follow-up; patch of fusion `ead12d1..HEAD`, shared files only)
+* `ProjectionUtils.projectOver` / `projectOverNonLatentNodes` (`_projectOverFast`) and `unproject` (`_unprojectFast`) run on the directed store of
+  the copy (do-calc ID on a 90-node, 450-edge, 50%-latent graph: 2.0 s -> 0.05 s); outside their domain (undirected graph, names colliding after
+  `correctNodeName`, existing latent names, non-plain `addEdges` cases) the legacy code runs unchanged.
+* `gu.moralize` takes the parents of each node from the core masks (moral edges keep the original types, as before; the old type-reset loop was a no-op).
+* `PathSearch`: per-search caches (node by name, edge-filter result with an edge-position index, target names), `PathSearch.useCaches = False`
+  disables them; `Graph._edges_touching` memoises its sorted selection on the core.
+* not ported: `BackdoorAdjustment._listMinSepFast` loops (fusion only).
+* `tests/primitives/test_phase5.py`; ListCITest golden (py3.12): 0 differences; tests 1,868 pass on py37 and py312.

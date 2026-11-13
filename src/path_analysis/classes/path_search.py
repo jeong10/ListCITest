@@ -14,6 +14,7 @@ class PathSearch():
 
     backtrack = 1
     forward = 0
+    useCaches = True
     paths = List[Path]
     graph = Graph
     # sources = List[Node]
@@ -37,7 +38,19 @@ class PathSearch():
         mode = self.forward
         lastSource = None
         visited = dict()
-        
+
+        # Phase 5.6 per-search caches (the graph does not change during a search): node dicts by name, edge-filter
+        # results by (node, previous edge) with an edge -> position index, target names.
+        # (``useCaches = False`` runs the search without them; used by the differential tests)
+        if self.useCaches:
+            self._nodeCache = dict()
+            self._edgeCache = dict()
+            self._targetNames = self._computeTargetNames()
+        else:
+            self._nodeCache = None
+            self._edgeCache = None
+            self._targetNames = None
+
         currentPath = Path([])
 
         if lastPath is not None and lastPath.length > 0:
@@ -67,7 +80,7 @@ class PathSearch():
                     visited[lastEdge.source] = True
 
                     # have we reached a target?
-                    if self.isTarget(gu.getNodeByName(lastEdge.target, self.graph)):
+                    if self.isTarget(self._node(lastEdge.target)):
                         # target reached
                         if not self.pathFilter or self.pathFilter(currentPath):
                             self.savePath(currentPath)
@@ -76,7 +89,7 @@ class PathSearch():
                         mode = self.backtrack
                     else:
                         # can we move forward?
-                        nextEdge = self.getEdgeAfter(gu.getNodeByName(lastEdge.target, self.graph), lastEdge, None, visited)
+                        nextEdge = self.getEdgeAfter(self._node(lastEdge.target), lastEdge, None, visited)
                         
                         if nextEdge is not None:
                             currentPath.push(nextEdge)
@@ -124,7 +137,7 @@ class PathSearch():
                     previousInPath = currentPath.lastEdge
 
                     # determine next edge to try
-                    source = gu.getNodeByName(lastEdge.source, self.graph)
+                    source = self._node(lastEdge.source)
                     nextEdge = self.getEdgeAfter(source, previousInPath, lastEdge, visited)
                     
                     if nextEdge is not None:
@@ -143,27 +156,33 @@ class PathSearch():
         if not self.edgeFilter or not node:
             return None
         
-        edges = self.edgeFilter(self.graph, node, previousInPath)
+        edges, positions = self._edgesFor(node, previousInPath)
         index = 0
-        
+
         if len(edges) == 0:
             return None
 
         if previouslySelected is not None:
-            # move the iterator right to the previous edge
-            # while edges[index] != previouslySelected.edge:
+            # move the iterator right to the previous edge: first position whose (from_, to_, type_) match
+            # (Phase 5.6: dictionary lookup instead of the scan of the legacy code, see the OLD block below)
             prevEdge = previouslySelected.edge
-            currEdge = edges[index]
-
-            # while index < len(edges) - 1 and not (currEdge['from_'] == prevEdge['from_'] and currEdge['to_'] == prevEdge['to_'] and currEdge['type_'] == prevEdge['type_']):
-            while index < len(edges) and not (currEdge['from_'] == prevEdge['from_'] and currEdge['to_'] == prevEdge['to_'] and currEdge['type_'] == prevEdge['type_']):
-                index = index + 1
-
-                if index < len(edges):
-                    currEdge = edges[index]
+            found = positions.get((prevEdge['from_'], prevEdge['to_'], prevEdge['type_']))
+            index = len(edges) if found is None else found
 
             # move onto the next one
             index = index + 1
+
+            # --- OLD (linear scan; same result) ---
+            # prevEdge = previouslySelected.edge
+            # currEdge = edges[index]
+            # while index < len(edges) and not (currEdge['from_'] == prevEdge['from_'] and currEdge['to_'] == prevEdge['to_'] and currEdge['type_'] == prevEdge['type_']):
+            #     index = index + 1
+            #
+            #     if index < len(edges):
+            #         currEdge = edges[index]
+            #
+            # index = index + 1
+            # --- END OLD ---
 
         if index >= len(edges):
             return None
@@ -186,11 +205,63 @@ class PathSearch():
             return PathEdge(edges[index], direction)
 
 
+    # str
+    # Node
+    def _node(self, name):
+        cache = getattr(self, '_nodeCache', None)
+
+        if cache is None:
+            return gu.getNodeByName(name, self.graph)
+
+        if name not in cache:
+            cache[name] = gu.getNodeByName(name, self.graph)
+
+        return cache[name]
+
+    # Node, PathEdge
+    # (Edge[], Dict)
+    def _edgesFor(self, node, previous):
+        """``edgeFilter(graph, node, previous)`` plus {(from_, to_, type_): first position}; both cached per search by the
+        identity of ``node`` and ``previous`` (the filters are functions of graph, node and previous only)."""
+        cache = getattr(self, '_edgeCache', None)
+
+        if cache is not None:
+            key = (id(node), id(previous))
+            hit = cache.get(key)
+
+            if hit is not None and hit[0] is node and hit[1] is previous:
+                return hit[2], hit[3]
+
+        edges = self.edgeFilter(self.graph, node, previous)
+        positions = dict()
+
+        for i, e in enumerate(edges):
+            positions.setdefault((e['from_'], e['to_'], e['type_']), i)
+
+        if cache is not None:
+            if len(cache) > 50000:
+                cache.clear()
+
+            cache[key] = (node, previous, edges, positions)
+
+        return edges, positions
+
+    def _computeTargetNames(self):
+        try:
+            return set(t['name'] for t in self.targets)
+        except (TypeError, KeyError):
+            return None
+
     # Node
     # boolean
     def isTarget(self, node):
         if node is None:
             return False
+
+        names = getattr(self, '_targetNames', None)
+
+        if names is not None:
+            return node['name'] in names
 
         return su.belongs(node, self.targets, compareNames)
 

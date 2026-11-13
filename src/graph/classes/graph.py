@@ -316,26 +316,34 @@ class Graph():
         else:
             core = self._get_core()
             act = core.full
-        index = core.index
-        to_pos, bid_from, nonbid_from = core.edge_index()
-        cand = set()
-        for nm in names:
-            i = index.get(nm)
-            if i is None:
-                continue
-            if incoming:
-                cand.update(to_pos[i])
-                cand.update(bid_from[i])
-            else:
-                cand.update(nonbid_from[i])
-        cn = core.names
-        edges = core.edges
-        out = []
-        for k in sorted(cand):
-            u, v2, a = edges[k]
-            if (act >> u) & 1 and (act >> v2) & 1:
-                out.append(Graph._edge_dict(cn[u], cn[v2], a))
-        return out
+        # Phase 5.6: the sorted (from, to, attrs) selection is memoised on the (immutable) core; dicts are built fresh
+        mkey = ('touch', tuple(names), incoming, act)
+        cache = core.cache
+        sel = cache.get(mkey)
+        if sel is None:
+            index = core.index
+            to_pos, bid_from, nonbid_from = core.edge_index()
+            cand = set()
+            for nm in names:
+                i = index.get(nm)
+                if i is None:
+                    continue
+                if incoming:
+                    cand.update(to_pos[i])
+                    cand.update(bid_from[i])
+                else:
+                    cand.update(nonbid_from[i])
+            cn = core.names
+            edges = core.edges
+            sel = []
+            for k in sorted(cand):
+                u, v2, a = edges[k]
+                if (act >> u) & 1 and (act >> v2) & 1:
+                    sel.append((cn[u], cn[v2], a))
+            if len(cache) >= 200000:
+                cache.clear()
+            cache[mkey] = sel
+        return [Graph._edge_dict(u, v2, a) for u, v2, a in sel]
 
     def _node_attrs(self, name):
         if self._ug is not None:

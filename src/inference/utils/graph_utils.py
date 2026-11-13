@@ -527,8 +527,40 @@ class GraphUtils():
         # convert all edges to undirected
         graph.toUndirected()
 
-        for edge in graph.edges:
-            edge['type_'] = undirectedEdgeType.id_
+        if G._ug is None:
+            # Phase 5.5: parents of every node as a mask of the core (graph order), married pairs checked against the
+            # undirected base graph, then added in the same order as ``addEdges`` would (nx adjacency order = first add).
+            # (The legacy loop that set ``edge['type_']`` on the fresh dicts of ``graph.edges`` had no effect: moral edges keep
+            # their original types, only the new ones are 'undirected'.)
+            v = G._query_view()
+            names = v.core.names
+            ug = graph._ug
+            queued = []
+
+            for i in iter_bits(v.active):
+                pm = v.parents(1 << i)
+
+                if pm & (pm - 1) == 0:
+                    continue
+
+                pa = [names[j] for j in iter_bits(pm)]
+
+                for a in pa:
+                    for b in pa:
+                        if b > a and not ug.has_edge(a, b):
+                            queued.append((a, b))
+
+            for a, b in queued:
+                ug.add_edge(a, b, label=None, type_=undirectedEdgeType.id_, metadata={})
+
+            graph._sv += 1
+
+            return graph
+
+        # --- OLD (pre-Phase 5.5; still the path for undirected input graphs) ---
+        # for edge in graph.edges:
+        #     edge['type_'] = undirectedEdgeType.id_       (no effect on fresh dicts)
+        # --- END OLD ---
 
         edgesToAdd = []
 
