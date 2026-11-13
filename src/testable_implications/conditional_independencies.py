@@ -3,7 +3,7 @@ import itertools
 from src.inference.utils.graph_utils import GraphUtils as gu, sortByName
 from src.inference.utils.set_utils import SetUtils as su
 from src.common.object_utils import ObjectUtils as ou
-from src.adjustment.adjustment_sets_utils import nodeNamesToString, TestSep
+from src.adjustment.adjustment_sets_utils import nodeNamesToString, TestSep, TestSepUnprojected
 from src.path_analysis.d_separation import DSeparation
 from src.projection.projection_utils import ProjectionUtils as pu
 
@@ -400,8 +400,12 @@ class ConditionalIndependencies():
         Rprime = su.difference(R, XY, 'name')
         Z = su.intersection(Rprime, gu.ancestorsPlus(XYI, G), 'name')
 
-        Ga = pu.unproject(G)
-        if TestSep(Ga, X, Y, Z):
+        # --- OLD (pre-Phase-2, reference only) ---
+        # Ga = pu.unproject(G)
+        # if TestSep(Ga, X, Y, Z):
+        # --- END OLD ---
+        # semi-Markovian Bayes ball: same answer without building the unprojected graph
+        if TestSepUnprojected(G, X, Y, Z):
             return Z
         else:
             return None

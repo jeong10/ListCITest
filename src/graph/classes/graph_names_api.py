@@ -155,6 +155,32 @@ class GraphNames(object):
         names = v.core.names
         return [names[i] for i in v.topo_order()]
 
+    # ---- separation (Bayes ball) ---------------------------------------------------
+
+    def m_separated(self, x, y, z=()):
+        """True if ``x`` and ``y`` are m-separated given ``z`` (semi-Markovian graphs: ``->`` and ``<->``).
+
+        Bidirected edges act as hidden common parents; no latent node is materialized.  For a graph
+        without ``<->`` edges this is ordinary d-separation.  ``x`` / ``y`` / ``z``: a name or an
+        iterable of names (KeyError for unknown names).  Nodes of ``x`` that are in ``y`` but not in
+        ``z`` make the answer False.
+        """
+        v = self._view()
+        return v.bayes_ball_admg(self._mask(x, v), self._mask(y, v), self._mask(z, v) if len(_as_names(z)) else 0)
+
+    def d_separated(self, x, y, z=()):
+        """True if ``x`` and ``y`` are d-separated given ``z`` (non-Markovian graphs: only ``->`` edges;
+        unobserved confounders are explicit latent nodes).
+
+        Raises ``ValueError`` if the graph has ``<->`` edges (use ``m_separated``, or unproject first).
+        """
+        v = self._view()
+
+        if any(v.nbr(BIDIRECTED)):
+            raise ValueError('The graph has bidirected edges: use m_separated(), or replace them by latent nodes first.')
+
+        return v.bayes_ball_dag(self._mask(x, v), self._mask(y, v), self._mask(z, v) if len(_as_names(z)) else 0)
+
     # ---- derived graphs (views) -------------------------------------------------
 
     def subgraph(self, x):

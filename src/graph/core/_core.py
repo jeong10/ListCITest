@@ -125,6 +125,54 @@ class _Core(object):
         new.full_view = _View(new)
         return new
 
+    def unproject_safe(self):
+        """True if replacing every ``<->`` edge by an explicit latent parent named like
+        ``ProjectionUtils.unproject`` does would be collision free: no two ``<->`` edges map to the
+        same latent name and no latent name equals a real node name.  Only then is
+        ``bayes_ball_admg`` guaranteed to equal ``bayes_ball_dag(unproject(G))``.  Cached per core.
+        """
+        res = getattr(self, '_unproject_safe', None)
+
+        if res is None:
+            # legacy lookups are case-insensitive and strip whitespace (correct_name), so latent names
+            # are compared under that normalisation, against each other and against the real nodes
+            seen = set()
+            res = True
+            names = self.names
+            real = set(correct_name(nm) for nm in names)
+
+            for u, v, a in self.edges:
+                if a.get('type_', DIRECTED) != BIDIRECTED:
+                    continue
+
+                f, t = names[u], names[v]
+                lo, hi = (f, t) if f < t else (t, f)
+                latent = correct_name(''.join(['U_{', lo, hi, '}']))
+
+                if latent in seen or latent in real:
+                    res = False
+                    break
+
+                seen.add(latent)
+
+            self._unproject_safe = res
+
+        return res
+
+    def names_unique_ci(self):
+        """True if no two node names are equal after ``correct_name`` (strip + upper-case).
+
+        The legacy separation code finds nodes through the case-insensitive ``getNodeByName`` (first
+        match), so the exact-name fast paths are only equivalent when this holds.  Cached per core.
+        """
+        res = getattr(self, '_names_unique_ci', None)
+
+        if res is None:
+            res = len(set(correct_name(nm) for nm in self.names)) == len(self.names)
+            self._names_unique_ci = res
+
+        return res
+
     def mask(self, names):
         """Mask of the given names (KeyError for unknown names)."""
         m = 0
@@ -334,6 +382,91 @@ class _View(object):
                 raise ValueError('The directed part of the graph contains a cycle.')
             return tuple(order)
         return self._memo('topo', 0, compute)
+
+    # ---- separation (Bayes ball) -------------------------------------------
+    #
+    # Both versions answer "is Y separated from X given Z?" with the state machine of the legacy
+    # ``TestSep`` (balls start at X going *up*; a ball that visits a node of Y that is not in Z means
+    # "connected"; an observed node blocks 'up' balls and lets 'down' balls turn around).  A state is
+    # (node, up|down); visited states are two bitsets and a whole frontier is expanded per round, so
+    # the cost is O(rounds * frontier) big-int operations.  ``X``, ``Y``, ``Z`` are masks.
+
+    def bayes_ball_dag(self, X, Y, Z):
+        """Non-Markovian version: only directed edges are traversed.
+
+        Unobserved confounders must be *explicit* (latent) nodes; ``<->`` edges are ignored.
+        Equals the legacy ``TestSep`` on the same graph.
+        """
+        act = self.active
+        X &= act
+        Z &= act
+        target = Y & act & ~Z
+        pa = self.pa
+        ch = self.ch
+        zan = Z | self.ancestors(Z)           # observed or ancestor of an observed node
+        up_vis = 0
+        down_vis = 0
+        up_new = X
+        down_new = 0
+
+        while True:
+            up_new &= ~up_vis
+            down_new &= ~down_vis
+
+            if not (up_new or down_new):
+                return True
+
+            up_vis |= up_new
+            down_vis |= down_new
+
+            if (up_new | down_new) & target:
+                return False
+
+            up_free = up_new & ~Z             # unobserved: ball passes on to parents (up) and children (down)
+            down_free = down_new & ~Z
+            send_up = up_free | (down_new & zan)    # a 'down' ball turns around at observed colliders/ancestors
+            up_new = _or_over(pa, send_up)
+            down_new = _or_over(ch, up_free | down_free)
+
+    def bayes_ball_admg(self, X, Y, Z):
+        """Semi-Markovian version: directed (``->``) and bidirected (``<->``) edges, no latent nodes.
+
+        A ``<->`` edge has an arrowhead at both ends, i.e. it behaves like a hidden common parent:
+        wherever the ball is sent up to the parents of ``n`` it is also sent *down* to the spouses of
+        ``n``.  Equals ``bayes_ball_dag`` on the graph in which every ``<->`` edge is replaced by an
+        explicit latent parent (``ProjectionUtils.unproject``), without building that graph.
+        """
+        act = self.active
+        X &= act
+        Z &= act
+        target = Y & act & ~Z
+        pa = self.pa
+        ch = self.ch
+        sp = self.nbr(BIDIRECTED)
+        zan = Z | self.ancestors(Z)
+        up_vis = 0
+        down_vis = 0
+        up_new = X
+        down_new = 0
+
+        while True:
+            up_new &= ~up_vis
+            down_new &= ~down_vis
+
+            if not (up_new or down_new):
+                return True
+
+            up_vis |= up_new
+            down_vis |= down_new
+
+            if (up_new | down_new) & target:
+                return False
+
+            up_free = up_new & ~Z
+            down_free = down_new & ~Z
+            send_up = up_free | (down_new & zan)
+            up_new = _or_over(pa, send_up)
+            down_new = _or_over(ch, up_free | down_free) | _or_over(sp, send_up)
 
     # ---- lookups ---------------------------------------------------------
 

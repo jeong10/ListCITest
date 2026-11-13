@@ -6,6 +6,47 @@ from src.inference.utils.graph_utils import GraphUtils as gu
 from src.common.object_utils import ObjectUtils as ou
 
 
+def separation_masks(G, X, Y, Z):
+    """``(view, xm, ym, zm)`` (bitset masks) when ``G`` / ``X`` / ``Y`` / ``Z`` fit the native
+    Bayes-ball fast path, else ``None`` (callers then use the legacy implementation).
+
+    Fast path domain: ``G`` is a directed-mode ``Graph`` whose edges are only ``->`` / ``<->`` and
+    every node of the three lists is a dict whose exact ``name`` is a node of ``G``.
+    """
+    if getattr(G, '_ug', 1) is not None:
+        return None
+
+    try:
+        v = G._query_view()
+    except (TypeError, AttributeError):
+        return None
+
+    if not v.core.simple or not v.core.names_unique_ci():
+        return None
+
+    index = v.core.index
+    act = v.active
+    masks = []
+
+    for lst in (X, Y, Z):
+        m = 0
+
+        for d in lst:
+            try:
+                i = index.get(d['name'])
+            except (TypeError, KeyError, IndexError):
+                return None
+
+            if i is None or not (act >> i) & 1:
+                return None
+
+            m |= 1 << i
+
+        masks.append(m)
+
+    return v, masks[0], masks[1], masks[2]
+
+
 class DSeparation():
 
     # Graph, Node[], Node[], Node[]
@@ -16,6 +57,17 @@ class DSeparation():
         Y = ou.makeArray(Y)
         Z = ou.makeArray(Z)
 
+        # fast path (Phase 2): for non-empty, pairwise disjoint X, Y, Z the path search below answers
+        # "is there a d-connecting simple path", which equals m-separation (Bayes ball on bitsets)
+        fast = separation_masks(G, X, Y, Z)
+
+        if fast is not None:
+            v, xm, ym, zm = fast
+
+            if xm and ym and not (xm & ym) and not (xm & zm) and not (ym & zm):
+                return v.bayes_ball_admg(xm, ym, zm)
+
+        # --- legacy path-search implementation (kept: used for every input outside the fast path) ---
         search = DSeparation.getPathSearch(G, X, Y, Z, 'd-con')
 
         if search is None:
