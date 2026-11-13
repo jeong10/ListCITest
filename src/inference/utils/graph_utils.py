@@ -4,6 +4,7 @@ from toposort import toposort_flatten
 from src.graph.classes.graph_defs import basicNodeType, latentNodeType, directedEdgeType, bidirectedEdgeType, undirectedEdgeType
 
 from src.inference.utils.set_utils import SetUtils as su
+from src.graph.core._core import iter_bits
 from src.common.object_utils import ObjectUtils as ou
 
 distribution_ids = 'distribution_ids'
@@ -25,6 +26,10 @@ def compareNames(n1, n2):
 
 
 class GraphUtils():
+
+    # @staticmethod
+    # def create():
+    #     return Graph(name = 'unnamed')
 
     # Graph, Graph
     # boolean
@@ -67,11 +72,73 @@ class GraphUtils():
     def clone(G, simplified=False):
         return G.copy()
 
+#     static clone(G: Graph, simplified: boolean = false): Graph {
+#         let graph: Graph = this.create();
+
+#         for (let node of G.nodes) {
+#             let newNode: Node = this.duplicateNode(node, simplified);
+
+#             graph.nodes.push(newNode);
+#         }
+
+#         for (let edge of G.edges) {
+#             let from: Node = this.getNodeByName(edge.from, graph);
+#             let to: Node = this.getNodeByName(edge.to, graph);
+
+#             if (!from || !to) continue;
+
+#             // if non-simplified, check ids
+#             if (!simplified && (!from.id || !to.id)) continue;
+
+#             let newEdge: Edge = this.duplicateEdge(edge, from.id, to.id, simplified);
+
+#             graph.edges.push(newEdge);
+#         }
+
+#         if (G.name)
+#             graph.name = G.name;
+
+#         if (G.task)
+#             graph.task = this.duplicateTask(G.task);
+
+#         if (G.metadata) {
+#             graph.metadata = ObjectUtils.clone(G.metadata);
+
+#             if (G.metadata.annotations)
+#                 this.copyAnnotations(graph, G);
+#         }
+
+#         if (G[distribution_ids])
+#             graph[distribution_ids] = ObjectUtils.clone(G[distribution_ids]);
+
+#         return graph;
+#     }
+
     @staticmethod
     def clear(G):
         G.nodes = []
         G.edges = []
         G.metadata = dict()
+
+#     static clear(G: Graph) {
+#         G.nodes = [];
+#         G.edges = [];
+#         G.metadata = Object.create(null);
+
+#         if (G.task) {
+#             for (let setType in G.task.sets) {
+#                 G.task.sets[setType] = [];
+#             }
+#         }
+#     }
+
+#     static isSubgraph(S: Graph, G: Graph): boolean {
+#         return su.isSubset(S.nodes, G.nodes) && su.isSubset(S.edges, G.edges);
+#     }
+
+#     static isMarkovian(G: Graph): boolean {
+#         return G && G.edges && G.edges.filter(e => e.type == directedEdgeType.id).length == G.edges.length;
+#     }
 
     # Node[]
 
@@ -117,7 +184,7 @@ class GraphUtils():
     def descendants(w, G):
         # return G.descendants(w)
         return GraphUtils.reach(w, G, directedEdgeType, Direction.forward)
-    
+
     @staticmethod
     def descendantsPlus(w, G):
         w = ou.makeArray(w)
@@ -140,12 +207,53 @@ class GraphUtils():
         
         return Sp
 
+    # Graph, Node[], Node[]
+    # Node[]
+
+    @staticmethod
+    def pcp(G, X, Y):
+        GXbar = GraphUtils.transform(G, X, None)
+        De = GraphUtils.descendants(X, GXbar)
+        DeXGxbmX = su.difference(De, X, 'name')
+        AnYGxb = GraphUtils.ancestors(Y, GraphUtils.transform(G, None, X))
+
+        return su.intersection(DeXGxbmX, AnYGxb, 'name')
+
+    # Graph, Node[], Node[]
+    # Node[]
+
+    @staticmethod
+    def Dpcp(G, X, Y):
+        pcp = GraphUtils.pcp(G, X, Y)
+        dpcp = GraphUtils.descendants(pcp, G)
+
+        return dpcp
+
     # Node | Node[], Graph, EdgeType, Direction
     # Node[]
 
     @staticmethod
     def reach(w, G, edgeType=None, direction=Direction.both):
         w = ou.makeArray(w)
+
+        # fast path on the bitset core: same nodes, same (G.nodes) order as the edge scan below
+        if G._ug is None:
+            t = edgeType.id_ if edgeType else None
+
+            if direction == Direction.both:
+                d = 'both'
+            elif t == directedEdgeType.id_:
+                d = 'forward' if direction == Direction.forward else 'backward'
+            else:
+                d = None
+
+            if d is not None:
+                v = G._query_view()
+                res = v.reach(G._mask_of(w, v.core), t, d)
+
+                return G._decode(res, v.core)
+
+        # legacy implementation (fallback: undirected graphs, direction-specific non-directed types)
 
         edges = []
 
@@ -187,6 +295,38 @@ class GraphUtils():
         reachableNodes = list(filter(lambda n: n['name'] in visited, G.nodes))
 
         return reachableNodes
+
+    # Graph, str[]
+    # Node[]
+
+    @staticmethod
+    def findSimplicialVertices(G, C):
+        return []
+
+#     static findSimplicialVertices(G: Graph, C: string[]): Node[] {
+#         let SV: Node[] = [];
+
+#         for (let name of C) {
+#             let node: Node = GraphUtils.getNodeByName(name, G);
+
+#             if (!node) continue;
+
+#             let neighbors: Node[] = GraphUtils.neighbors(node, G);
+#             let pairs: Node[][] = ObjectUtils.pairs(neighbors);
+
+#             for (let pair of pairs) {
+#                 let a: Node = pair[0];
+#                 let b: Node = pair[1];
+#                 let aNeighbors: Node[] = GraphUtils.neighbors(a, G);
+#                 if (aNeighbors.includes(b))
+#                     SV.push(GraphUtils.getNodeByName(name, G));
+#             }
+#         }
+
+#         return SV;
+#     }
+
+    # Node[]
 
     @staticmethod
     def filterBasicNodes(nodes, excludeLatentNodes=True):
@@ -231,6 +371,13 @@ class GraphUtils():
         if subset is None:
             return G
 
+        # fast path: induced subgraph as a cheap view (materialized only when mutated / edges read)
+        if G._ug is None:
+            v = G._query_view()
+
+            return type(G)._from_view(v.sub(G._mask_of(subset, v.core)))
+
+        # legacy implementation (fallback for undirected graphs)
         graph = G.copy()
         graph.deleteNodes(graph.nodes)
         graph.addNodes(su.intersection(G.nodes, subset, 'name'))
@@ -266,6 +413,17 @@ class GraphUtils():
         if not underline:
             underline = []
 
+        # fast path: without the *Except arguments the cut is a plain view over the core
+        if G._ug is None and not overlineExcept and not underlineExcept:
+            v = G._query_view()
+            nv = v.do(G._mask_of(overline, v.core), G._mask_of(underline, v.core))
+
+            if v.core.simple:
+                return type(G)._from_view(nv)
+
+            return type(G)._from_materialized(*nv.materialize())
+
+        # legacy implementation (fallback: *Except arguments, undirected graphs)
         over = dict()
         under = dict()
         overExcept = dict()
@@ -300,6 +458,36 @@ class GraphUtils():
         graph.deleteEdges(edgesToRemove)
 
         return graph
+
+    # Graph, Node[], Node[]
+    # Graph
+
+    @staticmethod
+    def gpbd(G, X, Y):
+        X = ou.makeArray(X)
+        Y = ou.makeArray(Y)
+        Dpcp = GraphUtils.Dpcp(G, X, Y)
+
+        xNames = GraphUtils.nodeToNameMap(X)
+        yNames = GraphUtils.nodeToNameMap(Y)
+        DpcpNames = GraphUtils.nodeToNameMap(Dpcp)
+
+        graph = G.copy()
+
+        edgesToRemove = []
+
+        for edge in graph.edges:
+            if edge['type_'] == directedEdgeType.id_:
+                if edge['from_'] in xNames:
+                    if edge['to_'] in DpcpNames or edge['to_'] in yNames:
+                        edgesToRemove.append(edge)
+
+        graph.deleteEdges(edgesToRemove)
+
+        return graph
+
+    # Graph
+    # Graph
 
     @staticmethod
     def moralize(G):
@@ -336,6 +524,28 @@ class GraphUtils():
 
         return graph
 
+    # Graph, Graph, Graph, Edge[]
+    # Graph
+
+    @staticmethod
+    def remoralize(G1, G2, M1, directedEdgesToRemove=[]):
+        toNodeNames = list(map(lambda e: e['to_'], directedEdgesToRemove))
+        toNodes = GraphUtils.getNodesByName(toNodeNames, G1)
+        PaToNodes = su.union(G1.parents(toNodes), toNodes, 'name')
+
+        G1sub = GraphUtils.subgraph(G1, PaToNodes)
+        G2sub = GraphUtils.subgraph(G2, PaToNodes)
+
+        M1sub = GraphUtils.moralize(G1sub)
+        M2sub = GraphUtils.moralize(G2sub)
+
+        undirectedEdgesToRemove = su.difference(M1sub.edges, M2sub.edges)
+
+        M2 = M1.copy()
+        M2.deleteEdges(undirectedEdgesToRemove)
+
+        return M2
+
     # Graph, Node[]
     # Graph
 
@@ -352,6 +562,32 @@ class GraphUtils():
 
     @staticmethod
     def cCompDecomposition(G, sortNodesBeforeOrdering=False):
+        # fast path: components come from the memoized core; ordering as below
+        # (components ordered by the topological position of their first node)
+        if G._ug is None:
+            V = GraphUtils.topoSort(G, sortNodesBeforeOrdering)
+            v = G._query_view()
+            compOf = dict()
+
+            for m in v.c_components():
+                for i in iter_bits(m):
+                    compOf[i] = m
+
+            emitted = set()
+            decomp = []
+
+            for node in V:
+                m = compOf[v.core.index[node['name']]]
+
+                if m in emitted:
+                    continue
+
+                emitted.add(m)
+                decomp.append(G._decode(m, v.core))
+
+            return decomp
+
+        # legacy implementation (fallback for undirected graphs)
         assignment = {}
         number = 0
         decomp = []
@@ -374,15 +610,400 @@ class GraphUtils():
 
         return decomp
 
+    @staticmethod
+    def hasCycles(G):
+        return False
+
+#     static hasCycles(G: Graph): boolean {
+#         // don't test if undirected edge exist
+#         for (let edge of G.edges) {
+#             if (edge.type == undirectedEdgeType.id)
+#                 return true;
+#         }
+
+#         // if we can find a topological order, then there is no cycle
+#         try {
+#             this.topoSort(G);
+#             return false;
+#         } catch (e) {
+#             // how to figure out which edge caused cycle?
+#             // it outputs node name (destination?)
+#             // console.log(e)
+#             return true;
+#         }
+#     }
+
+    # str[][]
+
+    @staticmethod
+    def findCycles(G):
+        return []
+
+#     /**
+#      * // https://stackoverflow.com/questions/30217313/how-to-improve-performance-of-finding-all-cycles-in-undirected-graphs
+#      * // https://stackoverflow.com/questions/12367801/finding-all-cycles-in-undirected-graphs
+#      * @param G
+#      * @return list of cycles where each cycle lists a sequence of node names
+#      */
+#     static findCycles(G: Graph): string[][] {
+#         let edges: string[][] = G.edges.map(e => [e.from, e.to]);
+#         let cycles: string[][] = [];
+
+#         for (let edge of edges) {
+#             for (let j = 0; j < 2; j++) {
+#                 this.findCycle(G, cycles, [edge[j]]);
+#             }
+#         }
+
+#         return cycles;
+#     }
+
+    @staticmethod
+    def __findCycle(G, cycles, path):
+        return
+
+#     private static findCycle(G: Graph, cycles: string[][], path: string[]) {
+#         let edges: string[][] = G.edges.map((e) => [e.from, e.to]);
+
+#         let startNode = path[0], nextNode: string;
+
+#         // visit each edge and each node of each edge
+#         for (let i = 0; i < edges.length; i++) {
+#             let edge: string[] = edges[i];
+
+#             for (var j = 0; j < 2; j++) {
+#                 let node: string = edge[j];
+
+#                 //  edge refers to our current node
+#                 if (node === startNode) {
+#                     nextNode = edge[(j + 1) % 2];
+
+#                     //  neighbor node not on path yet
+#                     if (!this.visited(nextNode, path))
+#                         //  explore extended path
+#                         this.findCycle(G, cycles, [nextNode].concat(path));
+
+#                     //  cycle found
+#                     else if ((path.length > 2) && (nextNode === path[path.length - 1])) {
+#                         if (this.isNew(path, cycles))
+#                             cycles.push(path);
+#                     }
+#                 }
+#             }
+#         }
+#     }
+
+    @staticmethod
+    def __visited(node, path):
+        return False
+
+#     private static visited(node: string, path: string[]): boolean {
+#         return (path.indexOf(node) !== -1);
+#     }
+
+    @staticmethod
+    def __isNew(path, cycles):
+        return True
+
+#     private static isNew(path: string[], cycles: string[][]): boolean {
+#         for (var i = 0; i < cycles.length; i++) {
+#             if (this.isEqualPaths(path, cycles[i]))
+#                 return false;
+#         }
+
+#         return true;
+#     }
+
+    @staticmethod
+    def __isEqualPaths(p1, p2):
+        return True
+
+#     private static isEqualPaths(p1: string[], p2: string[]): boolean {
+#         if (p1.length != p2.length) return false;
+
+#         for (let i = 0; i < p1.length; i++) {
+#             if (p1[i] != p2[i]) return false;
+#         }
+
+#         return true;
+#     }
+
+    @staticmethod
+    def findIsomorphicGraphLabels(G1, G2):
+        result = {'original': [], 'permuted': []}
+
+        return result
+
+#     static findIsomorphicGraphLabels(G1: Graph, G2: Graph): { original: string[], permuted: string[] } {
+#         let degreesOriginal = this.getNodeDegrees(G1);
+#         let degrees = this.getNodeDegrees(G2);
+
+#         let G1NodeLabels: string[] = G1.nodes.map((n) => n.label);
+#         let G2NodeLabels: string[] = G2.nodes.map((n) => n.label);
+
+#         let permutations = this.findPermutations(G2NodeLabels);
+
+#         for (let p of permutations) {
+#             let found: boolean = true;
+
+#             for (let i = 0; i < p.length; i++) {
+#                 let originalLabel: string = G1NodeLabels[i];
+#                 let permutedLabel: string = p[i];
+#                 let degreesOriginalNode: { in: number, out: number } = degreesOriginal[originalLabel];
+#                 let degreesPermutedNode: { in: number, out: number } = degrees[permutedLabel];
+
+#                 if (degreesOriginalNode && degreesPermutedNode)
+#                     if (degreesOriginalNode.in != degreesPermutedNode.in
+#                         || degreesOriginalNode.out != degreesPermutedNode.out) {
+#                         found = false;
+#                         break;
+#                     }
+#             }
+
+#             if (found) {
+#                 return {
+#                     original: G1NodeLabels,
+#                     permuted: p
+#                 };
+#             }
+#         }
+
+#         return { original: [], permuted: [] };
+#     }
+
+    @staticmethod
+    def getNodeDegrees(G):
+        result = dict()
+
+        return result
+
+#     static getNodeDegrees(G: Graph): { [key: string]: { in: number, out: number } } {
+#         if (!G || G.nodes.length == 0 || G.edges.length == 0) return {};
+
+#         let degrees = Object.create(null);
+
+#         for (let node of G.nodes) {
+#             degrees[node.label] = {
+#                 in: this.getIncoming(node, G).length,
+#                 out: this.getOutgoing(node, G).length
+#             };
+#         }
+
+#         return degrees;
+#     }
+
+    @staticmethod
+    def findPermutations(list, result=[], usedChars=[]):
+        return result
+
+#     // reference: https://stackoverflow.com/questions/9960908/permutations-in-javascript
+#     static findPermutations(list: any[], result: any[] = [], usedChars: any[] = []): any[] {
+#         var i, ch;
+#         for (i = 0; i < list.length; i++) {
+#             ch = list.splice(i, 1)[0];
+#             usedChars.push(ch);
+#             if (list.length == 0) {
+#                 result.push(usedChars.slice());
+#             }
+#             this.findPermutations(list, result, usedChars);
+#             list.splice(i, 0, ch);
+#             usedChars.pop();
+#         }
+#         return result;
+#     }
+
+#     static copyAnnotations(g: Graph, G: Graph) {
+#         let annotationsToAdd = {};
+#         let originalAnnotations: Annotation[] = G.metadata.annotations;
+
+#         for (let annotId in originalAnnotations) {
+#             let annot: Annotation = originalAnnotations[annotId];
+#             let newAnnot: Annotation = {
+#                 id: annotId,
+#                 type: annot.type,
+#                 metadata: ObjectUtils.clone(annot.metadata)
+#             };
+
+#             if (annot.type == labelAnnotationType.id) {
+#                 let targetId: string = annot.metadata.targetId;
+
+#                 if (!targetId) continue;
+
+#                 let nodes: Node[] = G.nodes.filter((n) => n.id == targetId);
+
+#                 if (nodes.length > 0) {
+#                     let node: Node = nodes[0];
+#                     let newNodes: Node[] = g.nodes.filter((n) => n.name == node.name);
+
+#                     if (newNodes.length > 0) {
+#                         let newNode: Node = newNodes[0];
+
+#                         newNode.metadata.labelNodeId = newAnnot.id;
+
+#                         annotationsToAdd[newAnnot.id] = newAnnot;
+#                     }
+#                 }
+
+#                 let edges: Edge[] = G.edges.filter((e) => e.id == targetId);
+
+#                 if (edges.length > 0) {
+#                     let edge: Edge = edges[0];
+#                     let newEdges: Edge[] = g.edges.filter((e) => e.label == edge.label);
+
+#                     if (newEdges.length > 0) {
+#                         let newEdge: Edge = newEdges[0];
+
+#                         newEdge.metadata.labelNodeId = newAnnot.id;
+
+#                         annotationsToAdd[newAnnot.id] = newAnnot;
+#                     }
+#                 }
+#             } else
+#                 annotationsToAdd[newAnnot.id] = newAnnot;
+#         }
+
+#         delete g.metadata.annotations;
+
+#         g.metadata.annotations = annotationsToAdd;
+#     }
+
+#     static duplicateNodesEdges(nodes: Node[], edges: Edge[]): { nodes: Node[], edges: Edge[] } {
+#         let newNodes: Node[] = [];
+#         let newEdges: Edge[] = [];
+
+#         for (let node of nodes) {
+#             let newNode: Node = this.duplicateNode(node);
+
+#             let newName: string = newNode.name + suffix;
+#             let newLabel: string = newNode.name;
+
+#             if (newNode.name == newNode.label)
+#                 newLabel = newName;
+
+#             newNode.name = newName;
+#             newNode.label = newLabel;
+
+#             if (newNode.metadata && newNode.metadata.x !== undefined && !isNaN(newNode.metadata.x))
+#                 newNode.metadata.x = parseFloat(newNode.metadata.x) + 20;
+#             if (newNode.metadata && newNode.metadata.y !== undefined && !isNaN(newNode.metadata.y))
+#                 newNode.metadata.y = parseFloat(newNode.metadata.y) + 20;
+
+#             if (newNode.metadata && newNode.metadata.labelNodeId)
+#                 delete newNode.metadata.labelNodeId;
+
+#             newNodes.push(newNode);
+#         }
+
+#         for (let edge of edges) {
+#             let from: Node, to: Node;
+#             let fromFilter: Node[] = newNodes.filter(n => { return n.name == edge.from + suffix });
+#             if (fromFilter.length > 0)
+#                 from = fromFilter[0];
+#             let toFilter: Node[] = newNodes.filter(n => { return n.name == edge.to + suffix });
+#             if (toFilter.length > 0)
+#                 to = toFilter[0];
+
+#             if (!from || !to) continue;
+#             if (!from.id || !to.id) continue;
+
+#             let newEdge: Edge = this.duplicateEdge(edge, from.id, to.id);
+#             newEdge.id = this.generateEdgeId(edge, from.id, to.id);
+#             newEdge.from = edge.from + suffix;
+#             newEdge.to = edge.to + suffix;
+
+#             // newEdges.push(this.duplicateEdge(edge, from.id, to.id, false));
+#             newEdges.push(newEdge);
+#         }
+
+#         return { nodes: newNodes, edges: newEdges };
+#     }
+
+#     static duplicateNode(n: Node, simplified: boolean = false): Node {
+#         let node: Node = Object.create(null);
+#         node.id = !simplified ? n.id : this.generateNodeId();
+#         // node.id = cloned ? n.id : this.generateNodeId();
+#         node.name = n.name;
+#         node.label = n.label ? n.label : n.name;
+#         node.type = n.type;
+#         if (n.metadata)
+#             node.metadata = ObjectUtils.clone(n.metadata);
+#         else
+#             node.metadata = Object.create(null);
+#         if (node.metadata.forceLabelWithoutSubscript)
+#             node.label = 'S';
+#         if (node.id != node.metadata.id)
+#             node.metadata.id = node.id;
+
+#         return node;
+#     }
+
+#     static duplicateEdge(e: Edge, fromId: string, toId: string, simplified: boolean = false): Edge {
+#         let edge: Edge = Object.create(null);
+#         edge.from = e.from;
+#         edge.to = e.to;
+#         edge.type = e.type ? e.type : directedEdgeType.id;
+#         edge.label = e.label;
+#         // edge.id = !simplified ? e.id : this.generateEdgeId(edge, e.from, e.to);
+#         edge.id = !simplified ? e.id : this.generateEdgeId(edge, fromId, toId);
+#         // edge.id = cloned ? e.id : this.generateEdgeId(edge, fromId, toId);
+
+#         // if (cloned)
+#         //     edge.id = e.id;
+#         // else
+#         //     edge.id = simplified ? this.generateEdgeId(edge, fromId, toId) : e.id;
+
+#         if (e.metadata)
+#             edge.metadata = ObjectUtils.clone(e.metadata);
+#         else
+#             edge.metadata = Object.create(null);
+#         if (edge.id != edge.metadata.id)
+#             edge.metadata.id = edge.id;
+#         edge.metadata.from = fromId;
+#         edge.metadata.to = toId;
+#         // edge.metadata.from = !simplified ? fromId : e.from;
+#         // edge.metadata.to = !simplified ? toId : e.to;
+#         // edge.metadata.from = cloned ? e.from : fromId;
+#         // edge.metadata.to = cloned ? e.to : toId;
+
+#         return edge;
+#     }
+
+#     static duplicateTask(task: Task): Task {
+#         let newTask = new BasicTask();
+#         newTask.type = task.type;
+#         newTask.sets = ObjectUtils.clone(task.sets);
+#         newTask.definitions = ObjectUtils.clone(task.definitions);
+#         newTask.collections = ObjectUtils.clone(task.collections);
+
+#         return newTask;
+#     }
+
     # str, Graph
     # Node
 
     @staticmethod
     def getNodeByName(name, G):
-        if not name or not G or not G.nodes:
+        if not name or not G:
             return None
 
-        return next((n for n in G.nodes if GraphUtils.correctNodeName(n['name']) == GraphUtils.correctNodeName(name)), None)
+        # case-insensitive, first match in G.nodes order (O(1) on the core's cached map)
+        first, last, gnames, gattrs = G._cname_maps()
+        i = first.get(GraphUtils.correctNodeName(name))
+
+        if i is None:
+            return None
+
+        return G._node_dict(gnames[i], gattrs[i])
+
+    # --- OLD (pre-graph-rewrite, reference only) ---
+    #     @staticmethod
+    #     def getNodeByName(name, G):
+    #         if not name or not G or not G.nodes:
+    #             return None
+    #
+    #         return next((n for n in G.nodes if GraphUtils.correctNodeName(n['name']) == GraphUtils.correctNodeName(name)), None)
+    #
+    # --- END OLD ---
 
     # str | str[], Graph
     # Node
@@ -393,40 +1014,75 @@ class GraphUtils():
             return []
 
         names = ou.makeArray(names)
-        dNames = dict()
 
-        for name in names:
-            if isinstance(name, str):
-                dNames[GraphUtils.correctNodeName(name)] = False
-            else:
-                v = name
-                dNames[GraphUtils.correctNodeName(v['name'])] = False
-
-        for node in G.nodes:
-            if GraphUtils.correctNodeName(node['name']) in dNames:
-                dNames[GraphUtils.correctNodeName(node['name'])] = node
-
+        # last match in G.nodes order wins (as the legacy dict-filling loop did)
+        first, last, gnames, gattrs = G._cname_maps()
+        found = dict()
         nodes = []
 
         for name in names:
-            actualName = ''
-
             if isinstance(name, str):
                 actualName = GraphUtils.correctNodeName(name)
             else:
-                actualName = GraphUtils.correctNodeName(node['name'])
+                # known diff: the legacy code used the stale loop variable ``node['name']`` here,
+                # so every node-dict input resolved to the last node of G.nodes
+                actualName = GraphUtils.correctNodeName(name['name'])
 
-            if actualName in dNames and dNames[actualName] is not False:
-                nodes.append(dNames[actualName])
+            i = last.get(actualName)
+
+            if i is None:
+                continue
+
+            if actualName not in found:
+                found[actualName] = G._node_dict(gnames[i], gattrs[i])
+
+            nodes.append(found[actualName])
 
         return nodes
+
+    # --- OLD (pre-graph-rewrite, reference only) ---
+    #     @staticmethod
+    #     def getNodesByName(names, G):
+    #         if not names or not G:
+    #             return []
+    #
+    #         names = ou.makeArray(names)
+    #         dNames = dict()
+    #
+    #         for name in names:
+    #             if isinstance(name, str):
+    #                 dNames[GraphUtils.correctNodeName(name)] = False
+    #             else:
+    #                 v = name
+    #                 dNames[GraphUtils.correctNodeName(v['name'])] = False
+    #
+    #         for node in G.nodes:
+    #             if GraphUtils.correctNodeName(node['name']) in dNames:
+    #                 dNames[GraphUtils.correctNodeName(node['name'])] = node
+    #
+    #         nodes = []
+    #
+    #         for name in names:
+    #             actualName = ''
+    #
+    #             if isinstance(name, str):
+    #                 actualName = GraphUtils.correctNodeName(name)
+    #             else:
+    #                 actualName = GraphUtils.correctNodeName(node['name'])
+    #
+    #             if actualName in dNames and dNames[actualName] is not False:
+    #                 nodes.append(dNames[actualName])
+    #
+    #         return nodes
+    #
+    # --- END OLD ---
 
     # str, str, Graph, EdgeType
     # Edge
 
     @staticmethod
     def getEdgeByName(from_, to_, G, type_=None):
-        if not G or not G.edges:
+        if not G:
             return None
 
         fromNode = GraphUtils.getNodeByName(from_, G)
@@ -435,20 +1091,82 @@ class GraphUtils():
         if not fromNode or not toNode:
             return None
 
-        if not type_:
-            return next((e for e in G.edges if e['from_'] == fromNode['name'] and e['to_'] == toNode['name']), None)
-        else:
-            return next((e for e in G.edges if e['from_'] == fromNode['name'] and e['to_'] == toNode['name'] and e['type_'] == type_.id_), None)
+        # exact (from, to) orientation, O(1) on directed graphs
+        edge = G._find_edge(fromNode['name'], toNode['name'])
+
+        if edge is None or (type_ and edge['type_'] != type_.id_):
+            return None
+
+        return edge
+
+    # --- OLD (pre-graph-rewrite, reference only) ---
+    #     @staticmethod
+    #     def getEdgeByName(from_, to_, G, type_=None):
+    #         if not G or not G.edges:
+    #             return None
+    #
+    #         fromNode = GraphUtils.getNodeByName(from_, G)
+    #         toNode = GraphUtils.getNodeByName(to_, G)
+    #
+    #         if not fromNode or not toNode:
+    #             return None
+    #
+    #         if not type_:
+    #             return next((e for e in G.edges if e['from_'] == fromNode['name'] and e['to_'] == toNode['name']), None)
+    #         else:
+    #             return next((e for e in G.edges if e['from_'] == fromNode['name'] and e['to_'] == toNode['name'] and e['type_'] == type_.id_), None)
+    #
+    # --- END OLD ---
 
     @staticmethod
     def hasEdge(from_, to_, G, type=None):
-        return G.nx.has_edge(from_, to_)
+        # --- OLD (pre-graph-rewrite, reference only) ---
+        # return G.nx.has_edge(from_, to_)
+        # --- END OLD ---
+        # native test: G.nx now builds a networkx graph on every access
+        return G.has_edge(from_, to_)
 
     # G, boolean
     # Node[]
 
     @staticmethod
     def topoSort(G, sort_=False):
+        # fast path: build the very same dependency dict (same insertion order => same
+        # toposort tie-breaking on a given Python/hash seed), skipping the dict-heavy node lookups
+        if G._ug is None:
+            v = G._query_view()
+            c = v.core
+            dep = dict()
+
+            for u, w, a in v.iter_edges():
+                if a.get('type_', directedEdgeType.id_) != directedEdgeType.id_:
+                    continue
+
+                to = c.names[w]
+
+                if to not in dep:
+                    dep[to] = set()
+
+                dep[to].add(c.names[u])
+
+            first, last, gnames, gattrs = G._cname_maps()
+            res = []
+            seen = set()
+
+            for name in toposort_flatten(dep, sort_):
+                i = last.get(GraphUtils.correctNodeName(name))
+
+                if i is not None and gnames[i] not in seen:
+                    seen.add(gnames[i])
+                    res.append(G._node_dict(gnames[i], gattrs[i]))
+
+            for i in iter_bits(v.active):
+                if c.names[i] not in seen:
+                    res.append(G._node_dict(c.names[i], c.attrs[i]))
+
+            return res
+
+        # legacy implementation (fallback for undirected graphs)
         nodeNames = list(map(lambda n: n['name'], G.nodes))
 
         # create dict of dependencies to run toposort
@@ -471,6 +1189,54 @@ class GraphUtils():
 
         return su.union(V, G.nodes, 'name')
 
+
+#     static minimizeSets(sets: Node[][]): Node[][] {
+#         if (!sets) return [];
+
+#         let newSets = sets.slice();
+
+#         let minSize: number = 1e8;
+
+#         for (let nodes of newSets) {
+#             if (nodes && nodes.length < minSize)
+#                 minSize = nodes.length;
+#         }
+
+#         newSets = newSets.filter(nodes => !nodes || (nodes && nodes.length <= minSize));
+
+#         return newSets;
+#     }
+
+#     static sortSets(sets: Node[][]): Node[][] {
+#         if (!sets) return [];
+
+#         let newSets = sets.slice();
+
+#         // sort results
+#         // sort names within each set of nodes
+#         for (let nodes of newSets) {
+#             if (nodes)
+#                 nodes = nodes.sort(sortByName);
+#         }
+
+#         // sort sets of nodes
+#         newSets.sort((sep1, sep2) => {
+#             let shorterLength: number = sep1.length > sep2.length ? sep2.length : sep1.length;
+
+#             for (let i = 0; i < shorterLength; i++) {
+#                 let a: Node = sep1[i];
+#                 let b: Node = sep2[i];
+
+#                 if (a.name < b.name) return -1;
+#                 else if (a.name > b.name) return 1;
+#             }
+
+#             return 0;
+#         });
+
+#         return newSets;
+#     }
+
     @staticmethod
     def nodesToVariables(nodes):
         nodes = ou.makeArray(nodes)
@@ -489,6 +1255,10 @@ class GraphUtils():
     @staticmethod
     def toString(G):
         return ''
+
+#     static toString(G: Graph): string {
+#         return G.nodes.map((node) => { return node.toString(); }).join(", ") + "; " + G.edges.map((edge) => { return edge.toString(); }).join(", ");
+#     }
 
     @staticmethod
     def correctNodeName(name):
@@ -521,6 +1291,30 @@ class GraphUtils():
 
         return attrs
 
+
+#     static generateNodeId() {
+#         return UUIDGenerator.generateRandomID(32);
+#     }
+
+#     static generateEdgeId(edge: Edge, fromId: string, toId: string): string {
+#         if (!fromId || !toId) return '';
+#         return fromId.toUpperCase() + edgeTypeMap.get(edge.type).shortId + toId.toUpperCase();
+#     }
+
+#     static parseEdgeId(edge: Edge): { from: string, to: string } {
+#         if (!edge || !edge.id || !edge.type) return null;
+
+#         let shortId: string = edgeTypeMap.get(edge.type).shortId;
+#         let tokens: string[] = edge.id.split(shortId);
+
+#         if (tokens.length != 2) return null;
+
+#         return {
+#             from: tokens[0],
+#             to: tokens[1]
+#         };
+#     }
+
     @staticmethod
     def mapNodeNames(nodes):
         nodes = ou.makeArray(nodes)
@@ -531,3 +1325,10 @@ class GraphUtils():
             namesMap[node['name']] = True
 
         return namesMap
+
+#     private static mapNodeNames(nodes: Node[] | Node): { [name: string]: boolean } {
+#         nodes = ObjectUtils.ou.makeArray(nodes);
+#         return nodes.reduce((map, n) => { map[n.name] = true; return map; }, Object.create(null));
+#     }
+
+# }

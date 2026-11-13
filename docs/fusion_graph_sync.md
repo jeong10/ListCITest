@@ -1,0 +1,25 @@
+# Graph core: sync notes with fusion_python
+
+The graph classes in this repo are copied from `fusion_python` (branch `graph-rewrite`, `src` state as of commit
+`bd93be7`), which is the ground truth for the graph core. See `docs/graph_api.md` for the API (legacy dict API plus
+the new name-based `G.names` API).
+
+Copied verbatim from fusion_python:
+* `src/graph/core/_core.py` (hidden bitset core, mask views, memoized queries)
+* `src/graph/classes/graph_names_api.py` (`G.names`)
+* `src/inference/utils/graph_utils.py` (hot paths run on the core)
+* `src/graph/classes/graph.py` (the commented-out `OLD` block at the bottom is fusion's pre-rewrite class)
+
+ListCITest-only changes in `src/graph/classes/graph.py` (re-apply them when syncing again):
+1. `import random`
+2. `Graph.ignore_missing_edge_deletion = True` (fusion: `False`, i.e. deleting a missing edge raises `NetworkXError`)
+3. `_stored_path`, `addRandomNodes`, `_addRandomDirectedEdges`, `addRandomEdges`, `toRandomGraph`: the exact `random` call
+   sequence of the original implementation (seeded experiments are reproducible). The original `nx.find_cycle(self.nx)` check
+   became a native reachability test over the stored edges (equivalent because the graph is acyclic before each insertion).
+
+`src/inference/utils/set_utils.py` was NOT replaced (it has `uniqueWith`, which `ListGMP` needs).
+
+Verification done for the migration (Python 3.12, `PYTHONHASHSEED=0`): CLI output of `main.py {gmp,lmp,clmp}` on
+`graphs/paper` + `graphs/bnlearn/sm`, seeded random graph construction / projection, ListCI/ListCIBF results, and the
+unit tests are identical to the pre-migration code; ListCI is ~2.8x faster on the paper and bnlearn graphs.
+`tests/graph_core` holds the graph tests shared with fusion_python.
