@@ -58,3 +58,9 @@ Verma / IV features are fusion-only): applied as a patch of fusion's `src/graph/
   disables them; `Graph._edges_touching` memoises its sorted selection on the core.
 * not ported: `BackdoorAdjustment._listMinSepFast` loops (fusion only).
 * `tests/primitives/test_phase5.py`; ListCITest golden (py3.12): 0 differences; tests 1,868 pass on py37 and py312.
+
+## Phase 5.2 (fusion `a3b0d36`, `graph_utils.py` only)
+* `gu.getNodeByName` inlines the name normalisation; `gu.getEdgeByName` resolves both endpoints on the cached name map (`G._cname_maps()`)
+  without building the node dicts (same results: first match on the corrected name, collisions, empty name -> None). The Phase 1-4 version is kept
+  as a commented `OLD` block. Measured gain is small (the call volume is under 1% of a do-calculus run): this keeps the two repos in sync.
+* `tests/primitives/test_name_lookup.py`; ListCITest golden (py3.12): 0 differences; tests 1,870 pass on py37 and py312.

@@ -1051,7 +1051,7 @@ class GraphUtils():
 
         # case-insensitive, first match in G.nodes order (O(1) on the core's cached map)
         first, last, gnames, gattrs = G._cname_maps()
-        i = first.get(GraphUtils.correctNodeName(name))
+        i = first.get(name.strip().upper())
 
         if i is None:
             return None
@@ -1148,19 +1148,39 @@ class GraphUtils():
         if not G:
             return None
 
-        fromNode = GraphUtils.getNodeByName(from_, G)
-        toNode = GraphUtils.getNodeByName(to_, G)
+        if not from_ or not to_:
+            return None
 
-        if not fromNode or not toNode:
+        # Phase 5.2: resolve both endpoints on the cached name map without building the node dicts
+        first, last, gnames, gattrs = G._cname_maps()
+        i = first.get(from_.strip().upper())
+        j = first.get(to_.strip().upper())
+
+        if i is None or j is None:
             return None
 
         # exact (from, to) orientation, O(1) on directed graphs
-        edge = G._find_edge(fromNode['name'], toNode['name'])
+        edge = G._find_edge(gnames[i], gnames[j])
 
         if edge is None or (type_ and edge['type_'] != type_.id_):
             return None
 
         return edge
+
+    # --- OLD (Phase 1-4 version: via getNodeByName, reference only) ---
+    #         fromNode = GraphUtils.getNodeByName(from_, G)
+    #         toNode = GraphUtils.getNodeByName(to_, G)
+    #
+    #         if not fromNode or not toNode:
+    #             return None
+    #
+    #         edge = G._find_edge(fromNode['name'], toNode['name'])
+    #
+    #         if edge is None or (type_ and edge['type_'] != type_.id_):
+    #             return None
+    #
+    #         return edge
+    # --- END OLD ---
 
     # --- OLD (pre-graph-rewrite, reference only) ---
     #     @staticmethod
